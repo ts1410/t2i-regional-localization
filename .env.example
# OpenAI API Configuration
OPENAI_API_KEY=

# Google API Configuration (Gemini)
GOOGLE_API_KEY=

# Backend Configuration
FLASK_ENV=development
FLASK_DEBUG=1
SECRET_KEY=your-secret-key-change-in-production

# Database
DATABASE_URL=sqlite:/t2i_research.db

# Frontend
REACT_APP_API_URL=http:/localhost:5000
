@@ -1,0 +1,129 @@
+# Regional Festival T2I Localization
+
+A research application for evaluating whether a text-to-image model can adapt the same commercial campaign to culturally distinct Indian regional festival contexts without producing generic, culturally incoherent, or incorrectly localized imagery.
+
+## Research question
+
+Can a T2I model adapt the same commercial campaign to culturally distinct Indian regional festival contexts without producing generic, culturally incoherent, or incorrectly localized imagery?
+
+## Hypothesis
+
+T2I models can learn to produce culturally coherent and region-specific advertising visuals when given a clear campaign brief, a specific regional/festival context, a product reference image, and a disciplined generation framework.
+
+## Pilot scope
+
+- Bihar — Makar Sankranti
+- Gujarat — Uttarayan
+
+Required models for the formal evaluation:
+
+1. GPT Image 1
+2. Gemini 2.5 Flash Image
+3. Gemini 3.1 Flash Image Preview
+
+## Project structure
+
+- `framework/` — reusable generation framework (source of truth for HOW)
+- `campaigns/` — campaign brief and regional execution (source of truth for WHAT)
+- `docs/` — methodology, protocol, and draft rubric
+- `backend/` — Python Flask API and provider logic
+- `frontend/` — lightweight research UI
+- `experiments/` — local SQLite database and metadata
+- `outputs/` — generated image files
+
+## Local setup
+
+### 1) Create a Python environment
+
+macOS/Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### 2) Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3) Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Then add any required API key values:
+
+- `OPENAI_API_KEY=`
+- `GOOGLE_API_KEY=`
+
+### 4) Initialize the database
+
+```bash
+python scripts/init_db.py
+```
+
+### 5) Run the backend
+
+```bash
+python backend/app.py
+```
+
+The API runs on http://localhost:5000.
+
+### 6) Open the frontend
+
+Open http://localhost:3000 only if you are serving the frontend with a dev static server. The app can also be served directly via the Flask backend at http://localhost:5000.
+
+## Backend API
+
+- `GET /api/project`
+- `GET /api/framework`
+- `GET /api/campaign`
+- `GET /api/models`
+- `GET /api/regions`
+- `GET /api/experiments`
+- `GET /api/experiments/<id>`
+- `GET /api/results`
+- `GET /api/results/<id>`
+- `POST /api/generate`
+- `GET /api/evaluation/rubric`
+- `POST /api/evaluation`
+- `GET /api/evaluation`
+
+## Generation workflow
+
+1. Open the Overview page.
+2. Read Methodology and Campaign.
+3. Select a model and region/festival.
+4. Trigger generation from the backend.
+5. Review metadata and saved image output.
+6. Compare results across region/model combinations.
+7. Only after review should new models or regions be introduced.
+
+## Research integrity
+
+- Prompt construction is separated from the evaluation rubric.
+- The product reference is treated as the source of truth.
+- The pilot remains exploratory and does not claim statistical conclusions.
+- No synthetic model outputs are created.
+- If an API key is missing, the app shows a clear config error instead of faking success.
+
+## Known limitations
+
+- GPT Image 1 and Gemini provider calls require real API credentials.
+- The final human-evaluation rubric is still draft and editable.
+- The pilot scope is intentionally limited to the initial two regional executions.
+
+## Notes
+
+The repository preserves the original research materials while exposing them through a readable application UI and a reproducible generation pipeline.

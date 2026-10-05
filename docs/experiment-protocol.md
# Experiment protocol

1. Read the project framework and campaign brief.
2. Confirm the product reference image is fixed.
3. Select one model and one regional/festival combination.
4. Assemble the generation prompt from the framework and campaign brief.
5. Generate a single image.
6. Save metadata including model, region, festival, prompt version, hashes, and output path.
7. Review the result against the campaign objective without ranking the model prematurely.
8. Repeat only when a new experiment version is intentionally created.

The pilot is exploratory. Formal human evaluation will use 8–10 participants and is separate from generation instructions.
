@@ -1,0 +1,56 @@
+docs/methodology.md
+# Research methodology
+
+## Research question
+
+Can a T2I model adapt the same commercial campaign to culturally distinct Indian regional festival contexts without producing generic, culturally incoherent, or incorrectly localized imagery?
+
+## Why this is being tested
+
+Regional festival localization is a useful evaluation axis because commercial advertising campaigns must feel authentic to a target audience. A model that can adapt a campaign to a local festival context without becoming generic or incoherent demonstrates stronger cultural grounding than a generic template-driven image generator.
+
+## Controlled variables
+
+The controlled variables are intentionally fixed across experiments:
+
+- same project framework
+- same campaign brief
+- same product reference
+- same commercial objective
+- same target audience
+- same campaign message
+
+## Variable regional context
+
+The variable is the regional/festival execution itself:
+
+- Bihar — Makar Sankranti
+- Gujarat — Uttarayan
+
+## Model comparison
+
+This project is designed to compare model performance while keeping the prompt structure, brand, product, and campaign objective constant. The model is the primary experimental variable. No model should be ranked without evaluation evidence.
+
+## Reference-image usage
+
+The product reference image acts as the visual source of truth for the product and packaging. It is not used as a loose aesthetic guide; it is treated as the anchor that must be preserved.
+
+## Generation protocol
+
+The generation prompt is assembled from:
+
+1. project framework Markdown
+2. campaign brief Markdown
+3. current regional execution
+4. product reference
+5. explicit generation task
+
+The human evaluation rubric is kept separate from the generation prompt to preserve research integrity.
+
+## Human evaluation
+
+The final research protocol anticipates 8–10 participants evaluating the generated images independently. The rubric remains draft and editable until the methodology is finalized.
+
+## Limitations
+
+This is a pilot and exploratory by design. It is not intended to represent a final, statistically conclusive evaluation of model quality.

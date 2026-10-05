@@ -1,0 +1,809 @@
+backend/database.py
+import json
+import os
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DB_PATH = ROOT / "experiments" / "t2i_research.db"
+
+
+def get_db_connection():
+    os.makedirs(ROOT / "experiments", exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    with closing(get_db_connection()) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS experiments (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                model TEXT NOT NULL,
+                model_version TEXT,
+                region TEXT NOT NULL,
+                festival TEXT NOT NULL,
+                experiment_id TEXT,
+                framework_version TEXT,
+                framework_hash TEXT,
+                campaign_version TEXT,
+                campaign_hash TEXT,
+                reference_image_hash TEXT,
+                prompt_version TEXT,
+                generation_parameters TEXT,
+                output_path TEXT,
+                status TEXT,
+                error TEXT,
+                provider TEXT,
+                api_key_present INTEGER,
+                metadata TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id TEXT PRIMARY KEY,
+                participant_id TEXT NOT NULL,
+                experiment_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                responses TEXT NOT NULL,
+                comment TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+
+def save_experiment(record):
+    with closing(get_db_connection()) as conn:
+        conn.execute(
+            """
+            INSERT INTO experiments (
+                id, timestamp, model, model_version, region, festival, experiment_id,
+                framework_version, framework_hash, campaign_version, campaign_hash,
+                reference_image_hash, prompt_version, generation_parameters, output_path,
+                status, error, provider, api_key_present, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                record["id"],
+                record["timestamp"],
+                record["model"],
+                record.get("model_version"),
+                record["region"],
+                record["festival"],
+                record.get("experiment_id"),
+                record.get("framework_version"),
+                record.get("framework_hash"),
+                record.get("campaign_version"),
+                record.get("campaign_hash"),
+                record.get("reference_image_hash"),
+                record.get("prompt_version"),
+                json.dumps(record.get("generation_parameters", {})),
+                record.get("output_path"),
+                record.get("status"),
+                record.get("error"),
+                record.get("provider"),
+                int(bool(record.get("api_key_present"))),
+                json.dumps(record.get("metadata", {})),
+            ],
+        )
+        conn.commit()
+
+
+def list_experiments():
+    with closing(get_db_connection()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM experiments ORDER BY timestamp DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_experiment(experiment_id):
+    with closing(get_db_connection()) as conn:
+        row = conn.execute(
+            "SELECT * FROM experiments WHERE id = ? OR experiment_id = ?",
+            (experiment_id, experiment_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+
+def save_evaluation(record):
+    with closing(get_db_connection()) as conn:
+        conn.execute(
+            """
+            INSERT INTO evaluations (id, participant_id, experiment_id, timestamp, responses, comment, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                record["id"],
+                record["participant_id"],
+                record["experiment_id"],
+                record["timestamp"],
+                json.dumps(record["responses"]),
+                record.get("comment"),
+                record["created_at"],
+            ],
+        )
+        conn.commit()
+
+
+def list_evaluations():
+    with closing(get_db_connection()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM evaluations ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+__all__ = [
+    "init_db",
+    "save_experiment",
+    "get_experiment",
+    "list_experiments",
+    "save_evaluation",
+    "list_evaluations",
+]
+"path":"backend/providers/base.py
+from abc import ABC, abstractmethod
+
+
+class ImageGenerationProvider(ABC):
+    @abstractmethod
+    def generate(self, prompt: str, model: str, parameters: dict | None = None, reference_image: str | None = None):
+        raise NotImplementedError
+"path":"backend/providers/openai_provider.py
+import base64
+import os
+from openai import OpenAI
+
+from backend.providers.base import ImageGenerationProvider
+
+
+class OpenAIImageProvider(ImageGenerationProvider):
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OpenAI API key is not configured.")
+        self.client = OpenAI(api_key=self.api_key)
+
+    def generate(self, prompt: str, model: str, parameters: dict | None = None, reference_image: str | None = None):
+        params = parameters or {}
+        response = self.client.images.generate(
+            model=model,
+            prompt=prompt,
+            size=params.get("size", "1536x1024"),
+            quality=params.get("quality", "high"),
+        )
+        if not getattr(response, "data", None):
+            raise RuntimeError("OpenAI returned no image data.")
+        image_data = response.data[0].b64_json
+        if not image_data:
+            raise RuntimeError("OpenAI generated response did not include image bytes.")
+        return {
+            "provider": "openai",
+            "model": model,
+            "image_b64": image_data,
+            "mime_type": "image/png",
+        }
+"path":"backend/providers/google_provider.py
+import os
+
+try:
+    import google.generativeai as genai
+except Exception:  # pragma: no cover
+    genai = None
+
+from backend.providers.base import ImageGenerationProvider
+
+
+class GoogleImageProvider(ImageGenerationProvider):
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError("Google API key is not configured.")
+        if genai is None:
+            raise RuntimeError("Google dependency is not available.")
+        genai.configure(api_key=self.api_key)
+
+    def generate(self, prompt: str, model: str, parameters: dict | None = None, reference_image: str | None = None):
+        params = parameters or {}
+        model_name = model
+        generation_config = {"temperature": params.get("temperature", 0.7)}
+        model_client = genai.GenerativeModel(model_name, generation_config=generation_config)
+        response = model_client.generate_content(prompt)
+
+        image_bytes = None
+        if hasattr(response, "parts"):
+            for part in response.parts:
+                if hasattr(part, "inline_data") and getattr(part.inline_data, "data", None):
+                    image_bytes = part.inline_data.data
+                    break
+        if image_bytes is None:
+            raise RuntimeError("Google returned no image data.")
+
+        return {
+            "provider": "google",
+            "model": model,
+            "image_b64": image_bytes,
+            "mime_type": "image/png",
+        }
+"path":"backend/services/prompt_builder.py
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def build_prompt(region: str, festival: str, model: str, custom_task: str | None = None):
+    framework_path = ROOT / "framework" / "T2I_ADVERTISING_CREATIVE_PROJECT_FRAMEWORK.md"
+    campaign_path = ROOT / "campaigns" / "REGIONAL_FESTIVAL_CAMPAIGN_PILOT.md"
+    framework_text = framework_path.read_text(encoding="utf-8")
+    campaign_text = campaign_path.read_text(encoding="utf-8")
+
+    task = custom_task or (
+        f"Generate one final advertising image for the {region.title()} — {festival.title()} execution. "
+        "Use the supplied product reference image as the source of truth for product identity and packaging. "
+        "Preserve the campaign objective and create a coherent regional commercial image without turning the brief into a checklist."
+    )
+
+    prompt = f"""PROJECT FRAMEWORK
+
+{framework_text}
+
+CAMPAIGN BRIEF
+
+{campaign_text}
+
+CURRENT REGIONAL EXECUTION
+
+- Region: {region.title()}
+- Festival: {festival.title()}
+- Model: {model}
+
+GENERATION TASK
+
+{task}
+
+Do not include the evaluation rubric in the generation prompt. Keep the prompt separate from human evaluation criteria. Generate one final image only.
+"""
+    return prompt
+"path":"backend/services/version_manager.py
+import hashlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def sha256_for_file(path):
+    path = Path(path)
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8192), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def get_version_info():
+    framework_path = ROOT / "framework" / "T2I_ADVERTISING_CREATIVE_PROJECT_FRAMEWORK.md"
+    campaign_path = ROOT / "campaigns" / "REGIONAL_FESTIVAL_CAMPAIGN_PILOT.md"
+    reference_path = ROOT / "Product_reference.jpeg"
+    if not reference_path.exists():
+        reference_path = ROOT / "references" / "product_reference.png"
+
+    return {
+        "framework_version": "v1",
+        "campaign_version": "v1",
+        "reference_version": "v1",
+        "framework_hash": sha256_for_file(framework_path),
+        "campaign_hash": sha256_for_file(campaign_path),
+        "reference_image_hash": sha256_for_file(reference_path) if reference_path.exists() else None,
+    }
+"path":"backend/app.py
+import base64
+import os
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS
+
+from backend.config import APP_CONFIG, EVALUATION_QUESTIONS, PROJECT_META, REQUIRED_MODELS, REGIONS, get_reference_path
+from backend.database import get_experiment, init_db, list_evaluations, list_experiments, save_evaluation, save_experiment
+from backend.providers.google_provider import GoogleImageProvider
+from backend.providers.openai_provider import OpenAIImageProvider
+from backend.services.prompt_builder import build_prompt
+from backend.services.version_manager import get_version_info
+
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUTS_DIR = ROOT / "outputs"
+FRONTEND_DIR = ROOT / "frontend"
+
+app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
+CORS(app)
+
+
+@app.route("/")
+def index():
+    return send_file(FRONTEND_DIR / "index.html")
+
+
+@app.route("/api/project", methods=["GET"])
+def api_project():
+    return jsonify(PROJECT_META)
+
+
+@app.route("/api/framework", methods=["GET"])
+def api_framework():
+    framework_path = APP_CONFIG["framework_path"]
+    content = framework_path.read_text(encoding="utf-8")
+    versions = get_version_info()
+    return jsonify({
+        "content": content,
+        "version": versions["framework_version"],
+        "hash": versions["framework_hash"],
+    })
+
+
+@app.route("/api/campaign", methods=["GET"])
+def api_campaign():
+    campaign_path = APP_CONFIG["campaign_path"]
+    content = campaign_path.read_text(encoding="utf-8")
+    versions = get_version_info()
+    return jsonify({
+        "content": content,
+        "version": versions["campaign_version"],
+        "hash": versions["campaign_hash"],
+    })
+
+
+@app.route("/api/models", methods=["GET"])
+def api_models():
+    return jsonify({"models": REQUIRED_MODELS})
+
+
+@app.route("/api/regions", methods=["GET"])
+def api_regions():
+    return jsonify({"regions": REGIONS})
+
+
+@app.route("/api/experiments", methods=["GET"])
+def api_experiments():
+    return jsonify({"experiments": list_experiments()})
+
+
+@app.route("/api/experiments/<experiment_id>", methods=["GET"])
+def api_experiment(experiment_id):
+    experiment = get_experiment(experiment_id)
+    if experiment is None:
+        return jsonify({"error": "Experiment not found."}), 404
+    return jsonify({"experiment": experiment})
+
+
+@app.route("/api/results", methods=["GET"])
+def api_results():
+    experiments = list_experiments()
+    results = [entry for entry in experiments if entry.get("output_path")]
+    return jsonify({"results": results})
+
+
+@app.route("/api/results/<experiment_id>", methods=["GET"])
+def api_result(experiment_id):
+    experiment = get_experiment(experiment_id)
+    if experiment is None:
+        return jsonify({"error": "Experiment not found."}), 404
+    output_path = ROOT / experiment["output_path"]
+    if not output_path.exists():
+        return jsonify({"error": "Result file not found."}), 404
+    return send_file(output_path, mimetype="image/png")
+
+
+@app.route("/api/evaluation/rubric", methods=["GET"])
+def api_evaluation_rubric():
+    rubric_path = ROOT / "docs" / "evaluation-rubric.md"
+    return jsonify({
+        "rubric": rubric_path.read_text(encoding="utf-8"),
+        "questions": EVALUATION_QUESTIONS,
+    })
+
+
+@app.route("/api/evaluation", methods=["GET"])
+def api_evaluation():
+    return jsonify({"evaluations": list_evaluations()})
+
+
+@app.route("/api/evaluation", methods=["POST"])
+def submit_evaluation():
+    payload = request.get_json(silent=True) or {}
+    participant_id = payload.get("participant_id")
+    experiment_id = payload.get("experiment_id")
+    if not participant_id or not experiment_id:
+        return jsonify({"error": "Participant ID and experiment ID are required."}), 400
+
+    record = {
+        "id": str(uuid.uuid4()),
+        "participant_id": participant_id,
+        "experiment_id": experiment_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "responses": payload.get("responses", {}),
+        "comment": payload.get("comment"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_evaluation(record)
+    return jsonify({"ok": True, "evaluation": record})
+
+
+@app.route("/api/generate", methods=["POST"])
+def generate_image():
+    payload = request.get_json(silent=True) or {}
+    model_id = payload.get("model")
+    region_id = payload.get("region")
+    festival_id = payload.get("festival")
+    if not model_id or not region_id or not festival_id:
+        return jsonify({"error": "Model, region, and festival are required."}), 400
+
+    model = next((item for item in REQUIRED_MODELS if item["id"] == model_id), None)
+    region = next((item for item in REGIONS if item["id"] == region_id), None)
+    if model is None:
+        return jsonify({"error": "Invalid experiment configuration."}), 400
+    if region is None:
+        return jsonify({"error": "Invalid experiment configuration."}), 400
+
+    api_key_name = model.get("requires_api_key")
+    if not os.getenv(api_key_name):
+        return jsonify({"error": f"{api_key_name.replace('_', ' ').title()} is not configured."}), 400
+
+    try:
+        prompt = build_prompt(region=region_id, festival=festival_id, model=model_id)
+        versions = get_version_info()
+        params = model.get("default_params", {})
+        provider_name = model["provider"]
+
+        if provider_name == "openai":
+            provider = OpenAIImageProvider(api_key=os.getenv(api_key_name))
+        elif provider_name == "google":
+            provider = GoogleImageProvider(api_key=os.getenv(api_key_name))
+        else:
+            return jsonify({"error": "Model is unavailable."}), 400
+
+        reference_path = str(get_reference_path())
+        result = provider.generate(prompt=prompt, model=model_id, parameters=params, reference_image=reference_path)
+
+        OUTPUTS_DIR.mkdir(exist_ok=True)
+        output_name = f"{model_id}_{region_id}_{festival_id}_{uuid.uuid4().hex[:8]}.png"
+        output_path = OUTPUTS_DIR / output_name
+        with output_path.open("wb") as handle:
+            handle.write(base64.b64decode(result["image_b64"]))
+
+        experiment_id = f"exp-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        metadata = {
+            "output_name": output_name,
+            "prompt": prompt,
+            "provider": provider_name,
+            "reference_path": reference_path,
+        }
+        record = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": model_id,
+            "model_version": "v1",
+            "region": region_id,
+            "festival": festival_id,
+            "experiment_id": experiment_id,
+            "framework_version": versions["framework_version"],
+            "framework_hash": versions["framework_hash"],
+            "campaign_version": versions["campaign_version"],
+            "campaign_hash": versions["campaign_hash"],
+            "reference_image_hash": versions["reference_image_hash"],
+            "prompt_version": "v1",
+            "generation_parameters": params,
+            "output_path": f"outputs/{output_name}",
+            "status": "success",
+            "error": None,
+            "provider": provider_name,
+            "api_key_present": True,
+            "metadata": metadata,
+        }
+        save_experiment(record)
+        return jsonify({"ok": True, "experiment": record})
+
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except FileNotFoundError:
+        return jsonify({"error": "Reference image could not be loaded."}), 400
+    except Exception as exc:
+        return jsonify({"error": "Generation failed.", "details": str(exc)}), 500
+
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+
+if __name__ == "__main__":
+    init_db()
+    app.run(host="0.0.0.0", port=5000, debug=True)
+"path":"scripts/init_db.py
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.database import init_db
+
+if __name__ == "__main__":
+    init_db()
+    print("SQLite database initialized.")
+"path":"framework/T2I_ADVERTISING_CREATIVE_PROJECT_FRAMEWORK.md
+# T2I Advertising Creative --- Project-Level Campaign Generation Framework
+
+## Purpose
+
+This file is the persistent, reusable instruction layer for an AI image-generation project.
+
+Its job is to define how to turn a campaign brief into a commercially usable advertising photograph.
+
+It is intentionally independent of any particular brand, product, festival, region, audience, campaign idea, advertisement, or model.
+
+Those details belong in a separate campaign brief/input file.
+
+---
+
+# 1. Role
+
+Act as an expert commercial advertising photographer, art director, creative director, and visual communication specialist.
+
+Your task is to transform the supplied campaign brief and reference assets into a polished, photorealistic advertising image suitable for commercial use.
+
+Think like a professional advertising production team rather than a general image generator.
+
+The campaign brief is the source of truth for what is being advertised, who it is for, what the campaign is trying to communicate, what visual context is required, what cultural or regional context is relevant, and what product/brand assets must be preserved.
+
+---
+
+# 2. Core Objective
+
+Create one coherent advertising photograph that balances four priorities:
+
+1. Campaign fidelity — communicate the intended campaign idea and commercial objective.
+2. Subject/product fidelity — accurately preserve supplied products, packaging, people, or other reference assets.
+3. Contextual relevance — construct the appropriate environment, setting, activity, mood, and cultural context specified by the brief.
+4. Commercial quality — produce a polished, believable visual suitable for advertising.
+
+Do not optimize for visual spectacle at the expense of these priorities.
+
+---
+
+# 3. Understand the Campaign Before Generating
+
+Before generating the image, internally identify:
+
+- The advertised product/service
+- The campaign's central idea
+- The intended audience
+- The desired emotional response
+- The intended commercial action/association
+- The setting and situation
+- The required cultural/regional context, if any
+- Which reference assets are immutable
+- Which aspects of the scene are intentionally flexible
+
+Do not expose this reasoning in the output.
+
+---
+
+# 4. Creative Interpretation
+
+Use the campaign brief as the creative direction.
+
+You may make reasonable visual decisions about composition, camera angle, framing, lens perspective, lighting, depth of field, background, environment, props, people, poses, natural interactions, colour relationships, time of day, atmosphere, and visual hierarchy.
+
+These choices should strengthen the campaign rather than introduce a different concept.
+
+Do not invent a new campaign idea.
+
+---
+
+# 5. Advertising Photography Standard
+
+The output should feel like a professionally produced commercial photograph.
+
+Aim for photorealistic materials, physically plausible lighting, natural shadows, realistic reflections, correct perspective, believable scale, natural human anatomy and interaction, appropriate depth of field, strong visual hierarchy, intentional composition, clear product/brand visibility when required, and a visually credible advertising environment.
+
+Avoid the appearance of generic AI stock imagery, randomly assembled objects, excessive visual clutter, unrealistic product placement, plastic-looking materials, physically impossible lighting, unnatural human poses, or decorative elements that do not serve the campaign.
+
+---
+
+# 6. Reference Asset Fidelity
+
+When a reference image is supplied, treat it as the source of truth for the referenced asset.
+
+Depending on the asset, preserve identity, shape, proportions, geometry, colour, material, texture, finish, packaging, container structure, logos, brand identity, printed text, label layout, graphics, patterns, distinctive features, and the number and arrangement of components.
+
+Do not redesign, replace, simplify, beautify, or substitute a supplied commercial asset unless the campaign brief explicitly asks for a transformation.
+
+Do not create a visually similar replacement and treat it as the supplied asset.
+
+---
+
+# 7. Context and Cultural Relevance
+
+When the campaign specifies a region, festival, community, cultural context, or local audience:
+
+- Build a coherent visual world appropriate to that context.
+- Use culturally relevant elements naturally.
+- Ensure people, clothing, objects, environment, activities, architecture, food, decoration, and social interactions make sense together.
+- Avoid generic representations when the brief calls for specificity.
+- Avoid combining unrelated traditions simply because individual elements appear visually attractive.
+- Avoid stereotypes and tokenistic cultural decoration.
+- Do not reduce cultural localization to one obvious symbolic object.
+
+When the brief does not require cultural localization, do not introduce unnecessary cultural assumptions.
+
+---
+
+# 8. Commercial Product Integration
+
+If a physical product is part of the campaign:
+
+- Make its role in the scene believable.
+- Keep it visually identifiable.
+- Integrate it naturally with people and surroundings.
+- Maintain appropriate scale and perspective.
+- Ensure the product supports the campaign rather than becoming an unrelated object.
+
+If the brief requires product prominence, prioritize clear product visibility.
+
+If the brief calls for a lifestyle scene, avoid making the image look like an isolated catalogue product shot unless requested.
+
+---
+
+# 9. People and Human Interaction
+
+When people are included:
+
+- Make interactions believable.
+- Use natural body language.
+- Make the activity relevant to the campaign.
+- Avoid repetitive or mannequin-like poses.
+- Avoid unnecessary crowds.
+- Ensure the people support the story rather than becoming the story by default.
+
+If regional or cultural context is specified, people should fit naturally within that context.
+
+---
+
+# 10. Text and Typography
+
+Do not introduce unnecessary text into the image.
+
+If text is explicitly required by the campaign brief:
+
+- Reproduce supplied text accurately where possible.
+- Preserve supplied brand names, logos, labels, and packaging text.
+- Do not invent additional claims, slogans, prices, offers, or regulatory statements.
+- Do not use text generation as a substitute for visual campaign communication unless requested.
+
+If the experiment is evaluating visual localization, prioritize the visual context over newly generated advertising copy.
+
+---
+
+# 11. Creative Trade-offs
+
+When requirements conflict, use this priority order unless the campaign brief explicitly overrides it:
+
+1. Required reference-asset fidelity
+2. Core campaign objective
+3. Required regional/cultural context
+4. Commercial realism and usability
+5. Visual creativity and aesthetic enhancement
+
+Never sacrifice an immutable reference asset merely to make the image more visually impressive.
+
+---
+
+# 12. What Not to Do
+
+Do not:
+
+- Change the core campaign idea.
+- Substitute a different product.
+- Invent a different brand.
+- Alter important supplied product characteristics.
+- Add unrelated cultural elements.
+- Mix incompatible regional traditions.
+- Use generic cultural imagery when specificity is required.
+- Add decorative objects merely to make the image look festive.
+- Turn every brief into the same generic advertising composition.
+- Prioritize spectacle over commercial communication.
+- Produce multiple concepts when one final image is requested.
+
+---
+
+# 13. Output
+
+Unless the campaign brief specifies otherwise:
+
+- Generate exactly one final advertising image.
+- Do not provide explanations.
+- Do not provide alternative concepts.
+- Do not provide a textual description of the image.
+- Do not add creative options.
+
+The image itself is the deliverable.
+
+---
+
+# 14. Campaign Input Contract
+
+A separate campaign brief should provide the following inputs where relevant:
+
+### Required
+
+- Campaign / working name
+- Brand
+- Product or service
+- Campaign idea
+- Campaign objective
+- Target audience
+- Creative format
+- Reference assets
+
+### Optional
+
+- Region / state / market
+- Festival / occasion
+- Cultural context
+- Desired emotion
+- Setting
+- Product role
+- People requirements
+- Visual style
+- Aspect ratio
+- Mandatory visual elements
+- Prohibited elements
+- Text requirements
+- Experimental constraints
+
+Do not assume that an optional field is required.
+
+---
+
+# 15. Controlled Experiment Compatibility
+
+If this framework is used for model comparison:
+
+Keep the following identical across models:
+
+- This project-level framework
+- Campaign brief
+- Reference assets
+- Creative format
+- Required constraints
+- Image-generation settings where controllable
+
+The model should be the primary experimental variable.
+
+Do not silently rewrite the brief differently for different models.
+
+---
+
+# 16. Separation of Responsibilities
+
+This framework answers how the agent should approach commercial image generation.
+
+The campaign brief answers what specific advertisement should be created.
+
+Do not move campaign-specific information into this file.
+
+Do not move general image-generation principles into individual campaign briefs unless a specific experiment requires an explicit override.
