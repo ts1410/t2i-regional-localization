@@ -1,0 +1,33 @@
+import hashlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def get_version_info():
+    framework_path = ROOT / "framework" / "T2I_ADVERTISING_CREATIVE_PROJECT_FRAMEWORK.md"
+    campaign_path = ROOT / "campaigns" / "REGIONAL_FESTIVAL_CAMPAIGN_PILOT.md"
+    reference_path = ROOT / "references" / "product_reference.png"
+
+    framework_hash = sha256_for_file(framework_path)
+    campaign_hash = sha256_for_file(campaign_path)
+    reference_hash = sha256_for_file(reference_path)
+
+    return {
+        "framework_version": "v1",
+        "campaign_version": "v1",
+        "reference_version": "v1",
+        "framework_hash": framework_hash,
+        "campaign_hash": campaign_hash,
+        "reference_image_hash": reference_hash,
+    }
+
+
+def sha256_for_file(path):
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(8192), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
