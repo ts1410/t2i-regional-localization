@@ -1,143 +1,81 @@
-import json
 import os
-import sqlite3
-from contextlib import closing
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "experiments" / "t2i_research.db"
+
+REQUIRED_MODELS = [
+    {
+        "id": "gpt-image-1",
+        "name": "GPT Image 1",
+        "provider": "openai",
+        "requires_api_key": "OPENAI_API_KEY",
+        "default_params": {"quality": "high", "size": "1536x1024"},
+    },
+    {
+        "id": "gemini-2.5-flash-image",
+        "name": "Gemini 2.5 Flash Image",
+        "provider": "google",
+        "requires_api_key": "GOOGLE_API_KEY",
+        "default_params": {"temperature": 0.7},
+    },
+    {
+        "id": "gemini-3.1-flash-image-preview",
+        "name": "Gemini 3.1 Flash Image Preview",
+        "provider": "google",
+        "requires_api_key": "GOOGLE_API_KEY",
+        "default_params": {"temperature": 0.7},
+    },
+]
+
+REGIONS = [
+    {
+        "id": "bihar",
+        "name": "Bihar",
+        "festival": "Makar Sankranti",
+        "festival_id": "makar-sankranti",
+        "status": "pilot",
+    },
+    {
+        "id": "gujarat",
+        "name": "Gujarat",
+        "festival": "Uttarayan",
+        "festival_id": "uttarayan",
+        "status": "pilot",
+    },
+]
+
+PROJECT_META = {
+    "title": "Regional Festival T2I Localization",
+    "research_question": "Can a T2I model adapt the same commercial campaign to culturally distinct Indian regional festival contexts without producing generic, culturally incoherent, or incorrectly localized imagery?",
+    "hypothesis": "T2I models can learn to produce culturally coherent and region-specific advertising visuals when given a clear campaign brief, a specific regional/festival context, a product reference image, and a disciplined generation framework.",
+    "status": "Pilot / exploratory research",
+}
+
+APP_CONFIG = {
+    "framework_path": ROOT / "framework" / "T2I_ADVERTISING_CREATIVE_PROJECT_FRAMEWORK.md",
+    "campaign_path": ROOT / "campaigns" / "REGIONAL_FESTIVAL_CAMPAIGN_PILOT.md",
+    "reference_path": ROOT / "references" / "product_reference.png",
+    "fallback_reference_path": ROOT / "Product_reference.jpeg",
+    "outputs_dir": ROOT / "outputs",
+    "experiments_db": ROOT / "experiments" / "t2i_research.db",
+}
+
+EVALUATION_QUESTIONS = [
+    {"id": "regional_specificity", "label": "Regional cultural specificity"},
+    {"id": "cultural_coherence", "label": "Cultural coherence"},
+    {"id": "campaign_fidelity", "label": "Campaign objective/message"},
+    {"id": "product_fidelity", "label": "Product fidelity"},
+    {"id": "commercial_quality", "label": "Commercial advertising quality"},
+    {"id": "overall_usefulness", "label": "Overall usefulness"},
+]
 
 
-def get_db_connection():
-    os.makedirs(ROOT / "experiments", exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    with closing(get_db_connection()) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS experiments (
-                id TEXT PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                model TEXT NOT NULL,
-                model_version TEXT,
-                region TEXT NOT NULL,
-                festival TEXT NOT NULL,
-                experiment_id TEXT,
-                framework_version TEXT,
-                framework_hash TEXT,
-                campaign_version TEXT,
-                campaign_hash TEXT,
-                reference_image_hash TEXT,
-                prompt_version TEXT,
-                generation_parameters TEXT,
-                output_path TEXT,
-                status TEXT,
-                error TEXT,
-                provider TEXT,
-                api_key_present INTEGER,
-                metadata TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS evaluations (
-                id TEXT PRIMARY KEY,
-                participant_id TEXT NOT NULL,
-                experiment_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                responses TEXT NOT NULL,
-                comment TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-
-
-def save_experiment(record):
-    with closing(get_db_connection()) as conn:
-        conn.execute(
-            """
-            INSERT INTO experiments (
-                id, timestamp, model, model_version, region, festival, experiment_id,
-                framework_version, framework_hash, campaign_version, campaign_hash,
-                reference_image_hash, prompt_version, generation_parameters, output_path,
-                status, error, provider, api_key_present, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                record["id"],
-                record["timestamp"],
-                record["model"],
-                record.get("model_version"),
-                record["region"],
-                record["festival"],
-                record.get("experiment_id"),
-                record.get("framework_version"),
-                record.get("framework_hash"),
-                record.get("campaign_version"),
-                record.get("campaign_hash"),
-                record.get("reference_image_hash"),
-                record.get("prompt_version"),
-                json.dumps(record.get("generation_parameters", {})),
-                record.get("output_path"),
-                record.get("status"),
-                record.get("error"),
-                record.get("provider"),
-                int(bool(record.get("api_key_present"))),
-                json.dumps(record.get("metadata", {})),
-            ],
-        )
-        conn.commit()
-
-
-def list_experiments():
-    with closing(get_db_connection()) as conn:
-        rows = conn.execute(
-            "SELECT * FROM experiments ORDER BY timestamp DESC"
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-
-def get_experiment(experiment_id):
-    with closing(get_db_connection()) as conn:
-        row = conn.execute(
-            "SELECT * FROM experiments WHERE id = ? OR experiment_id = ?",
-            (experiment_id, experiment_id),
-        ).fetchone()
-        if row is None:
-            return None
-        return dict(row)
-
-
-def save_evaluation(record):
-    with closing(get_db_connection()) as conn:
-        conn.execute(
-            """
-            INSERT INTO evaluations (id, participant_id, experiment_id, timestamp, responses, comment, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                record["id"],
-                record["participant_id"],
-                record["experiment_id"],
-                record["timestamp"],
-                json.dumps(record["responses"]),
-                record.get("comment"),
-                record["created_at"],
-            ],
-        )
-        conn.commit()
-
-
-def list_evaluations():
-    with closing(get_db_connection()) as conn:
-        rows = conn.execute(
-            "SELECT * FROM evaluations ORDER BY created_at DESC"
-        ).fetchall()
-        return [dict(row) for row in rows]
+def get_reference_path():
+    if APP_CONFIG["reference_path"].exists():
+        return APP_CONFIG["reference_path"]
+    if APP_CONFIG["fallback_reference_path"].exists():
+        return APP_CONFIG["fallback_reference_path"]
+    return APP_CONFIG["reference_path"]
